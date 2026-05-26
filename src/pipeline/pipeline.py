@@ -16,20 +16,34 @@ class PipelineStats:
     records_ingested_per_source: dict
     records_dropped_per_transform: dict
     records_written: dict
-    errors: int
+    records_errored_per_transform: int
     walltime: float
 
 class Pipeline:
-    def __init__(self, sink):
+    def __init__(self, sink, error_sink = None):
         self.sink = sink
+        self.error_sink = error_sink
         self.sources = []
         self.transforms: list[TransformMetadata] = [] #list of transformations
 
         self.records_ingested_per_source: dict = {}
         self.records_dropped_per_transform: dict = {}
+        self.records_errored_per_transform: dict = {}
         self.records_written: int = 0
-        self.errors = 0
         self.walltime = None
+    
+    def _validate_record(self, record, trans):
+        """
+        ok = apply
+        skip = skip this transform
+        error = something's broken
+        """
+        for field, expected_type in trans.input_fields.items():
+            if field not in record:
+                return "skip"
+            if not isinstance(record[field], expected_type):
+                return "error"
+        return "ok"
     
     def add_source(self, source):
         self.sources.append(source)
@@ -59,46 +73,51 @@ class Pipeline:
             self.records_ingested_per_source,
             self.records_dropped_per_transform,
             self.records_written,
-            self.errors,
+            self.records_errored_per_transform,
             self.walltime
         )
 
     async def _consume(self, queue):
-        while True:
-            line = await queue.get() #get data from q
-            if line is None: #if i add more, can track the number of Nones
-                break #None sentinel signals finished.
+            while True:
+                record = await queue.get()
+                if record is None:
+                    break
 
-            ##apply transformations.
-            #you have a line = a dict.
-    
-            if self.transforms == []:
-                self.sink.write(line)
-                self.records_written += 1
-            else:
+                drop = False
                 for trans in self.transforms:
-                    function = trans.func
-                    
-                    #validate inpute fields before applying trans:
-                    for field in trans.input_fields.keys():
-                        val = line[field]
-                        if val is None: #field does not exist
-                            ## f"Input field {field} is missing"
-                            # potentially drop the trecord
-                        else:
-                            if type(val) in trans.input_fields[field]:
-                                break
-                            else: #type does not match
-                                # f"Input type for field {field} must be {trans.input_fields[field]}"
+                    status = self._validate_record(record, trans)
 
-                    line = function(line) #apply transformation
-                    print(f"transformation applied {trans.name}")
-                    if line is None: #if it returns None, it means the record was dropped 
-                        self.records_dropped_per_transform[trans.name] = self.records_dropped_per_transform.get(trans.name,0) + 1
-                        print(f"record dropped {line}")
+                    if status == "skip":
+                        continue
+
+                    if status == "error":
+                        self.records_errored_per_transform[trans.name] = \
+                            self.records_errored_per_transform.get(trans.name, 0) + 1
+                        if self.error_sink:
+                            self.error_sink.write({"record": record, "transform": trans.name, "reason": "wrong type"})
+                        drop = True
                         break
-                self.sink.write(line)
-                print(f"line written")
+
+                    # status == "ok"
+                    try:
+                        record = trans.func(record)
+                    except Exception as e:
+                        self.records_errored_per_transform[trans.name] = \
+                            self.records_errored_per_transform.get(trans.name, 0) + 1
+                        if self.error_sink:
+                            self.error_sink.write({"record": record, "transform": trans.name, "reason": str(e)})
+                        drop = True
+                        break
+
+                    if record is None:
+                        self.records_dropped_per_transform[trans.name] = \
+                            self.records_dropped_per_transform.get(trans.name, 0) + 1
+                        drop = True
+                        break
+
+                if drop:
+                    continue
+                self.sink.write(record)
                 self.records_written += 1
     
     async def _produce(self, queue):
@@ -111,15 +130,15 @@ class Pipeline:
             self.records_ingested_per_source[source.name] = source.records_ingested
         await queue.put(None)
 
-    def transform(self, input_fields: dict[str, list[type]], kind: str):
+    def transform(self, input_fields: dict = None, kind: str = ""):
         def decorator(func):
             #wraps function. before it runs it, it appends info to self.transforms
             self.transforms.append(TransformMetadata(
-                func = func,
-                input_fields=input_fields,
+                func=func,
+                input_fields=input_fields or {}, #empty dict DEFAULT
                 kind=kind,
                 name=func.__name__,
             ))
             print(f"Transformation recorded: func: {func}, input_fields ={input_fields},kind = {kind}")
             return func
-        return decorator 
+        return decorator

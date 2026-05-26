@@ -36,7 +36,7 @@ class CSVSink:
         
         self.headers = headers
     
-        self.writer = csv.DictWriter(self.file. self.headers)
+        self.writer = csv.DictWriter(self.file, self.headers)
 
         print("CSV Sink successfully created")
     

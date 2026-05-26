@@ -12,12 +12,12 @@ async def main():
     pipeline.add_source(CSVSource("test.csv"))
     pipeline.add_source(JSONLSource("test_json.jsonl"))
 
-    @pipeline.transform(["age"], "clean")
+    @pipeline.transform(kind="clean")
     def age_to_int(line):
         line["age"] = int(line["age"])
         return line
     
-    @pipeline.transform(["age"], "transform")
+    @pipeline.transform(kind="transform")
     def age_to_months(line):
         line["age"] = line["age"]*12
         return line
