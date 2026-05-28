@@ -1,54 +1,36 @@
 import json
 import csv
+from typing import Any
+from io import TextIOWrapper
+
+Record = dict[str, Any]
+
 
 class JSONLSink:
-    def __init__(self, path: str, headers: list):
-        #store path
+    def __init__(self, path: str, headers: list[str]) -> None:
         self.path = path
-
-        #open file for writing
-            #store file handle on self
-        self.file = open(self.path, 'w')
-
         self.headers = headers
+        self.file: TextIOWrapper = open(path, "w")
 
-        print("JSON Sink successfully created")
-        
-    def write(self, record):
-        #take a dict, json.dumps it
+    def write(self, record: Record) -> None:
+        # if headers specified, only write those keys
+        out = {k: record[k] for k in self.headers if k in record} if self.headers else record
+        self.file.write(json.dumps(out) + "\n")
 
-        line = json.dumps(record)
-        self.file.write(line)
-        self.file.write("\n")
-
-        print(f"wrote line {line}")
-
-        #write to file followed by \n
-    def close(self):
-        #close the file handle
+    def close(self) -> None:
         self.file.close()
-    
+
+
 class CSVSink:
-    def __init__(self, path: str, headers: list):
+    def __init__(self, path: str, headers: list[str]) -> None:
         self.path = path
-
-        self.file = open(self.path, 'w')
-        
         self.headers = headers
-    
-        self.writer = csv.DictWriter(self.file, self.headers)
+        self.file: TextIOWrapper = open(path, "w")
+        self.writer = csv.DictWriter(self.file, headers, extrasaction="ignore")
+        self.writer.writeheader()
 
-        print("CSV Sink successfully created")
-    
-    def write(self, record):
+    def write(self, record: Record) -> None:
         self.writer.writerow(record)
 
-    def close(self):
+    def close(self) -> None:
         self.file.close()
-
-#test
-# if __name__ == "__main__":
-#     sink = JSONLSink("test_output.jsonl")
-#     sink.write({"name": "alice", "age": 30})
-#     sink.write({"name": "bob", "age": 25})
-#     sink.close()
